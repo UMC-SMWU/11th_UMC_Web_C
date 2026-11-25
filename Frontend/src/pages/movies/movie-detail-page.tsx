@@ -1,8 +1,14 @@
-import { Link, useParams } from "@tanstack/react-router";
+import { Link, useNavigate, useParams } from "@tanstack/react-router";
 import { useQuery } from "@tanstack/react-query";
 import { movieQueries } from "../../api/movies/movie-queries";
 import { MovieImage } from "../../components/movies/movie-image";
-import { useBookmarkStore } from "../../stores/bookmark-store";
+import { MyRatingPanel } from "../../components/movies/my-rating-panel";
+import { useFavoriteStatusQuery } from "../../hooks/use-favorite-queries";
+import {
+  useAddFavoriteMutation,
+  useRemoveFavoriteMutation,
+} from "../../hooks/use-favorite-mutations";
+import { useAuthStore } from "../../stores/auth-store";
 import { cn } from "../../utils/cn";
 import {
   formatReleaseDate,
@@ -27,10 +33,32 @@ export function MovieDetailPage() {
     ? getMovieDetailErrorMessage(movieDetailQuery.error)
     : null;
 
-  const isBookmarked = useBookmarkStore((state) =>
-    state.bookmarkedMovieIds.includes(parsedMovieId),
-  );
-  const toggleBookmark = useBookmarkStore((state) => state.toggleBookmark);
+  const navigate = useNavigate();
+  const accessToken = useAuthStore((state) => state.accessToken);
+  const favoriteStatusQuery = useFavoriteStatusQuery(parsedMovieId);
+  const addFavoriteMutation = useAddFavoriteMutation();
+  const removeFavoriteMutation = useRemoveFavoriteMutation();
+
+  const isBookmarked = favoriteStatusQuery.data ?? false;
+  const isFavoritePending =
+    addFavoriteMutation.isPending ||
+    removeFavoriteMutation.isPending ||
+    (Boolean(accessToken) && favoriteStatusQuery.isPending);
+
+  const handleToggleFavorite = () => {
+    if (!accessToken) {
+      alert("로그인이 필요해요.");
+      navigate({ to: "/login" });
+      return;
+    }
+    if (isFavoritePending) return;
+
+    if (isBookmarked) {
+      removeFavoriteMutation.mutate(parsedMovieId);
+    } else {
+      addFavoriteMutation.mutate(parsedMovieId);
+    }
+  };
 
   if (!isValidMovieId) {
     return (
@@ -106,9 +134,10 @@ export function MovieDetailPage() {
           <p className="text-[14px] leading-6 font-normal">{movie.overview}</p>
           <button
             type="button"
-            onClick={() => toggleBookmark(movie.id)}
+            disabled={isFavoritePending}
+            onClick={handleToggleFavorite}
             className={cn(
-              "flex h-[42px] min-w-[107px] items-center justify-center gap-2 rounded-lg px-4 whitespace-nowrap text-white",
+              "flex h-[42px] min-w-[107px] items-center justify-center gap-2 rounded-lg px-4 whitespace-nowrap text-white disabled:opacity-60",
               isBookmarked ? "bg-[#17191E]" : "bg-[#2563EB]",
             )}
           >
@@ -127,45 +156,7 @@ export function MovieDetailPage() {
           </button>
         </div>
 
-        <aside className="box-content flex w-[329px] shrink-0 flex-col gap-3 border-l border-[#E5E7EB] pl-8">
-          <div className="flex flex-col gap-1">
-            <h2 className="text-[21px] leading-none font-bold tracking-[-0.63px]">
-              내 평점
-            </h2>
-            <p className="text-[14px] leading-6 text-[#969DA8]">
-              별점은 필수, 후기는 선택이에요.
-            </p>
-          </div>
-
-          <div className="flex gap-1.5">
-            {[1, 2, 3, 4, 5].map((score) => (
-              <button
-                key={score}
-                type="button"
-                aria-label={`${score}점`}
-                className="flex h-[38px] w-[38px] items-center justify-center rounded-lg border border-[#E5E7EB] bg-white px-1.5 py-px"
-              >
-                <img
-                  src="/icons/movie-icons/star.svg"
-                  alt=""
-                  className="h-6 w-6"
-                />
-              </button>
-            ))}
-          </div>
-
-          <textarea
-            placeholder="영화를 보고 느낀 점을 남겨보세요."
-            className="h-[102px] w-full resize-none rounded-lg border border-[#E5E7EB] bg-white pt-4 pr-3 pb-[18px] pl-3 text-[13px] leading-[19.5px] placeholder:text-[#969DA8]"
-          />
-
-          <button
-            type="button"
-            className="h-[42px] w-full rounded-lg bg-[#17191E] px-4 text-[14px] leading-none font-extrabold text-white"
-          >
-            평점 저장
-          </button>
-        </aside>
+        <MyRatingPanel movieId={movie.id} />
       </div>
     </main>
   );

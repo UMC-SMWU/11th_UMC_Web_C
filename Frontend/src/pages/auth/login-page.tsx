@@ -1,5 +1,6 @@
 import { Link } from "@tanstack/react-router";
 import { useState, type SubmitEvent } from "react";
+import { useLoginMutation } from "@/hooks/use-login-mutation";
 
 const EMAIL_REGEX = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 
@@ -12,6 +13,7 @@ type LoginFormKey = keyof typeof DEFAULT_FORM;
 
 export function LoginPage() {
   const [form, setForm] = useState(DEFAULT_FORM);
+  const loginMutation = useLoginMutation();
 
   const isEmailValid = EMAIL_REGEX.test(form.email.trim());
   const canSubmit = isEmailValid && form.password.length > 0;
@@ -22,8 +24,12 @@ export function LoginPage() {
 
   const handleSubmit = (e: SubmitEvent<HTMLFormElement>) => {
     e.preventDefault();
-    if (!canSubmit) return;
-    // 로그인 API 연결은 이번 미션 범위가 아니라 다음 주차에 추가해요.
+    if (!canSubmit || loginMutation.isPending) return;
+
+    loginMutation.mutate({
+      email: form.email.trim(),
+      password: form.password,
+    });
   };
 
   const inputClassName =
@@ -91,10 +97,10 @@ export function LoginPage() {
 
         <button
           type="submit"
-          disabled={!canSubmit}
+          disabled={!canSubmit || loginMutation.isPending}
           className="h-[46px] w-full rounded-[6px] bg-[#2563EB] text-[13px] font-extrabold text-white disabled:opacity-40"
         >
-          로그인
+          {loginMutation.isPending ? "로그인 중" : "로그인"}
         </button>
       </form>
 

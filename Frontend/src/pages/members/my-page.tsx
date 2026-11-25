@@ -1,22 +1,18 @@
 import { Link } from "@tanstack/react-router";
-import { useQueries } from "@tanstack/react-query";
+import { useQueries, useQuery } from "@tanstack/react-query";
 import { isHTTPError } from "ky";
-import { useEffect, useState } from "react";
-import { getMemberRatings } from "../../api/members/get-member-ratings";
-import type { MemberRating } from "../../api/members/models";
-import { getMovieDetail } from "../../api/movies/get-movie-detail";
-import type { TmdbMovieDetail } from "../../api/movies/models";
+import { useState } from "react";
+import { getMe } from "../../api/members/me";
 import { movieQueries } from "../../api/movies/movie-queries";
 import MovieGrid from "../../components/movies/movie-grid";
 import { MovieImage } from "../../components/movies/movie-image";
 import { Pagination } from "../../components/movies/pagination";
-import { useBookmarkStore } from "../../stores/bookmark-store";
+import { useFavoritesQuery } from "../../hooks/use-favorite-queries";
+import { useMyRatingsQuery } from "../../hooks/use-my-ratings-query";
+import { useAuthStore } from "../../stores/auth-store";
 import { useProfileStore } from "../../stores/profile-store";
 import { formatReleaseDate } from "../../utils/movies/format-movie";
 import { getTmdbPosterUrl } from "../../utils/movies/tmdb-image";
-
-// 로그인 기능 전까지는 시드 데이터의 회원으로 고정해요.
-const CURRENT_MEMBER_ID = 1;
 
 const FAVORITES_PER_PAGE = 10;
 
@@ -24,7 +20,24 @@ const SERVER_ERROR_MESSAGE =
   "서버에 연결하지 못했어요. 백엔드 서버가 켜져 있는지 확인해 주세요.";
 
 function BasicInfo() {
-  const { nickname, email, profileImageUrl } = useProfileStore();
+  const profileImageUrl = useProfileStore((state) => state.profileImageUrl);
+  const accessToken = useAuthStore((state) => state.accessToken);
+  const meQuery = useQuery({
+    queryKey: ["members", "me"],
+    queryFn: getMe,
+    enabled: Boolean(accessToken),
+    staleTime: 5 * 60 * 1000,
+    retry: false,
+  });
+
+  const nickname = !accessToken
+    ? "로그인이 필요해요."
+    : meQuery.isPending
+      ? "불러오는 중..."
+      : meQuery.isError
+        ? "정보를 불러오지 못했어요."
+        : meQuery.data.nickname;
+  const email = meQuery.data?.email ?? "-";
 
   return (
     <section className="border-t border-[#E5E7EB] pt-5">
@@ -61,13 +74,13 @@ function BasicInfo() {
 }
 
 function MyFavorites() {
-  const bookmarkedMovieIds = useBookmarkStore(
-    (state) => state.bookmarkedMovieIds,
-  );
+  // 서버가 최근에 등록한 순서로 내려줘요.
+  const favoritesQuery = useFavoritesQuery();
   const [page, setPage] = useState(1);
 
-  // 최근에 즐겨찾기한 영화가 먼저 보이도록 뒤집어요.
-  const movieIds = [...bookmarkedMovieIds].reverse();
+  const movieIds = (favoritesQuery.data ?? []).map(
+    (favorite) => favorite.movieId,
+  );
   const totalPages = Math.max(
     1,
     Math.ceil(movieIds.length / FAVORITES_PER_PAGE),
@@ -93,7 +106,15 @@ function MyFavorites() {
     <section>
       <h3 className="mb-5 text-[16px] leading-none font-bold">내 즐겨찾기</h3>
 
-      {movieIds.length === 0 ? (
+      {favoritesQuery.isPending ? (
+        <p className="py-10 text-center text-[#969DA8]">
+          즐겨찾기 목록을 불러오는 중이에요.
+        </p>
+      ) : favoritesQuery.isError ? (
+        <p className="py-10 text-center text-[#969DA8]">
+          즐겨찾기 목록을 불러오지 못했어요.
+        </p>
+      ) : movieIds.length === 0 ? (
         <p className="py-10 text-center text-[#969DA8]">
           아직 즐겨찾기한 영화가 없어요.
         </p>
@@ -119,11 +140,6 @@ function MyFavorites() {
   );
 }
 
-interface RatingWithMovie {
-  rating: MemberRating;
-  movie: TmdbMovieDetail | null;
-}
-
 function getRatingsErrorMessage(error: unknown) {
   if (isHTTPError(error) && error.response.status === 404) {
     return "존재하지 않는 회원이에요.";
@@ -135,47 +151,23 @@ function getRatingsErrorMessage(error: unknown) {
 }
 
 function MyRatings() {
-  const [items, setItems] = useState<RatingWithMovie[]>([]);
-  const [isLoading, setIsLoading] = useState(true);
-  const [errorMessage, setErrorMessage] = useState<string | null>(null);
+  // 토큰에서 꺼낸 memberId로 내 평점을 불러와요. 영화 상세의 내 평점과 같은 query예요.
+  const myRatingsQuery = useMyRatingsQuery();
+  const ratings = myRatingsQuery.data ?? [];
 
-  useEffect(() => {
-    let ignore = false;
+  // 평점마다 영화 정보를 불러와요. 영화 상세 화면과 캐시를 함께 써요.
+  const movieDetailQueries = useQueries({
+    queries: ratings.map((rating) => movieQueries.detail(rating.movieId)),
+  });
+  const items = ratings.map((rating, index) => ({
+    rating,
+    movie: movieDetailQueries[index]?.data ?? null,
+  }));
 
-    async function loadRatings() {
-      setIsLoading(true);
-      setErrorMessage(null);
-
-      try {
-        const ratings = await getMemberRatings(CURRENT_MEMBER_ID);
-        const movieResults = await Promise.allSettled(
-          ratings.map((rating) => getMovieDetail(rating.movieId)),
-        );
-
-        if (!ignore) {
-          setItems(
-            ratings.map((rating, index) => {
-              const result = movieResults[index];
-              return {
-                rating,
-                movie: result.status === "fulfilled" ? result.value : null,
-              };
-            }),
-          );
-        }
-      } catch (error) {
-        if (!ignore) setErrorMessage(getRatingsErrorMessage(error));
-      } finally {
-        if (!ignore) setIsLoading(false);
-      }
-    }
-
-    loadRatings();
-
-    return () => {
-      ignore = true;
-    };
-  }, []);
+  const isLoading = myRatingsQuery.isPending;
+  const errorMessage = myRatingsQuery.isError
+    ? getRatingsErrorMessage(myRatingsQuery.error)
+    : null;
 
   return (
     <section className="flex flex-col gap-4 rounded-[12px] border border-[#E5E7EB] bg-white p-6">

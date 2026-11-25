@@ -1,6 +1,10 @@
+import { useQuery } from "@tanstack/react-query";
 import { useNavigate } from "@tanstack/react-router";
 import { useState, type ChangeEvent, type SubmitEvent } from "react";
 import { checkNickname as checkNicknameDuplicate } from "@/api/members/check-nickname";
+import { getMe, type MemberInfo } from "@/api/members/me";
+import { useUpdateMeMutation } from "@/hooks/use-update-me-mutation";
+import { useAuthStore } from "@/stores/auth-store";
 import { useProfileStore } from "@/stores/profile-store";
 
 const MAX_PROFILE_IMAGE_SIZE = 5 * 1024 * 1024; // 5MB
@@ -10,21 +14,29 @@ const DEFAULT_DUPLICATE_CHECK = {
   isAvailable: false,
 };
 
-export function MyInfoEditPage() {
-  const navigate = useNavigate();
-  const profile = useProfileStore();
+interface MyInfoEditFormProps {
+  member: MemberInfo;
+}
 
-  const [nickname, setNickname] = useState(profile.nickname);
-  const [profileImageUrl, setProfileImageUrl] = useState(
-    profile.profileImageUrl,
+function MyInfoEditForm({ member }: MyInfoEditFormProps) {
+  const navigate = useNavigate();
+  const savedProfileImageUrl = useProfileStore(
+    (state) => state.profileImageUrl,
   );
+  const setSavedProfileImageUrl = useProfileStore(
+    (state) => state.setProfileImageUrl,
+  );
+  const updateMeMutation = useUpdateMeMutation();
+
+  const [nickname, setNickname] = useState(member.nickname);
+  const [profileImageUrl, setProfileImageUrl] = useState(savedProfileImageUrl);
   const [nicknameCheck, setNicknameCheck] = useState(DEFAULT_DUPLICATE_CHECK);
 
   const trimmedNickname = nickname.trim();
   const isNicknameValid =
     trimmedNickname.length >= 2 && trimmedNickname.length <= 12;
-  const isNicknameChanged = trimmedNickname !== profile.nickname;
-  const isImageChanged = profileImageUrl !== profile.profileImageUrl;
+  const isNicknameChanged = trimmedNickname !== member.nickname;
+  const isImageChanged = profileImageUrl !== savedProfileImageUrl;
   const showNicknameError = nickname.length > 0 && !isNicknameValid;
 
   // 닉네임을 바꿨다면 중복 확인까지 통과해야 저장할 수 있어요.
@@ -82,12 +94,27 @@ export function MyInfoEditPage() {
 
   const handleSubmit = (e: SubmitEvent<HTMLFormElement>) => {
     e.preventDefault();
-    if (!canSave) return;
+    if (!canSave || updateMeMutation.isPending) return;
 
-    // 내 정보 수정 API를 연결하기 전까지는 화면 store에만 반영해요.
-    profile.updateProfile({ nickname: trimmedNickname, profileImageUrl });
-    alert("변경사항을 저장했어요.");
-    navigate({ to: "/me" });
+    // 프로필 이미지는 서버 API가 없어서 브라우저에만 저장해요.
+    const saveProfileImage = () => setSavedProfileImageUrl(profileImageUrl);
+
+    if (!isNicknameChanged) {
+      saveProfileImage();
+      alert("변경사항을 저장했어요.");
+      navigate({ to: "/me" });
+      return;
+    }
+
+    updateMeMutation.mutate(
+      { nickname: trimmedNickname },
+      {
+        onSuccess: () => {
+          saveProfileImage();
+          navigate({ to: "/me" });
+        },
+      },
+    );
   };
 
   const handleWithdraw = () => {
@@ -112,10 +139,10 @@ export function MyInfoEditPage() {
           </div>
           <button
             type="submit"
-            disabled={!canSave}
+            disabled={!canSave || updateMeMutation.isPending}
             className="h-[40px] rounded-[6px] bg-[#2563EB] px-4 text-[12px] font-extrabold text-white disabled:opacity-40"
           >
-            변경사항 저장
+            {updateMeMutation.isPending ? "저장 중" : "변경사항 저장"}
           </button>
         </div>
 
@@ -211,7 +238,7 @@ export function MyInfoEditPage() {
               <input
                 id="email"
                 type="email"
-                value={profile.email}
+                value={member.email}
                 readOnly
                 className={`${inputClassName} text-[#606774]`}
               />
@@ -240,4 +267,42 @@ export function MyInfoEditPage() {
       </section>
     </main>
   );
+}
+
+export function MyInfoEditPage() {
+  const accessToken = useAuthStore((state) => state.accessToken);
+  const meQuery = useQuery({
+    queryKey: ["members", "me"],
+    queryFn: getMe,
+    enabled: Boolean(accessToken),
+    staleTime: 5 * 60 * 1000,
+    retry: false,
+  });
+
+  if (!accessToken) {
+    return (
+      <main className="py-20 text-center text-[#969DA8]">
+        로그인이 필요해요.
+      </main>
+    );
+  }
+
+  if (meQuery.isPending) {
+    return (
+      <main className="py-20 text-center text-[#969DA8]">
+        내 정보를 불러오는 중이에요.
+      </main>
+    );
+  }
+
+  if (meQuery.isError) {
+    return (
+      <main className="py-20 text-center text-[#969DA8]">
+        내 정보를 불러오지 못했어요.
+      </main>
+    );
+  }
+
+  // 서버에서 받은 내 정보를 초기값으로 폼을 그려요.
+  return <MyInfoEditForm member={meQuery.data} />;
 }
